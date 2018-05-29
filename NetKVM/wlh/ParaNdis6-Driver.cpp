@@ -707,6 +707,7 @@ static void SetupInterrruptAffinity(PIO_RESOURCE_REQUIREMENTS_LIST prrl)
 {
     PIO_RESOURCE_LIST list;
     ULONG procIndex = 0;
+    int interruptDescNum = 0;
 
     list = prrl->List;
 
@@ -731,6 +732,9 @@ static void SetupInterrruptAffinity(PIO_RESOURCE_REQUIREMENTS_LIST prrl)
                     desc->Flags |= CM_RESOURCE_INTERRUPT_POLICY_INCLUDED;
                     desc->u.Interrupt.Group = procNumber.Group;
                     desc->u.Interrupt.TargetedProcessors = 1i64 << procNumber.Number;
+                    desc->u.Interrupt.AffinityPolicy = IrqPolicySpecifiedProcessors;
+                    DPrintf(0, "[%s]: Assigning CmResourceTypeInterrupt, min/max = %lx/%lx Option = 0x%lx, ShareDisposition = %u to #CPU = %d\n", __FUNCTION__,
+                        desc->u.Interrupt.MinimumVector, desc->u.Interrupt.MaximumVector, desc->Option, desc->ShareDisposition, procNumber.Number);
                 }
                 else
                 {
@@ -739,7 +743,7 @@ static void SetupInterrruptAffinity(PIO_RESOURCE_REQUIREMENTS_LIST prrl)
 #else
                 desc->u.Interrupt.TargetedProcessors = 1i64 << procIndex;
 #endif
-                if (jx % 2 == 1)
+                if (interruptDescNum % 2 == 1)
                 {
                     procIndex++;
 
@@ -748,6 +752,7 @@ static void SetupInterrruptAffinity(PIO_RESOURCE_REQUIREMENTS_LIST prrl)
                         procIndex = 0;
                     }
                 }
+                interruptDescNum++;
             }
         }
         list = (PIO_RESOURCE_LIST)(list->Descriptors + list->Count);

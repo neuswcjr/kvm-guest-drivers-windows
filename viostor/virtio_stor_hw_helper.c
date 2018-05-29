@@ -94,14 +94,14 @@ RhelDoFlush(
     srbExt->out                = 1;
     srbExt->in                 = 1;
 
-    srbExt->vbr.sg[0].physAddr = StorPortGetPhysicalAddress(DeviceExtension, NULL, &srbExt->vbr.out_hdr, &fragLen);
-    srbExt->vbr.sg[0].length   = sizeof(srbExt->vbr.out_hdr);
-    srbExt->vbr.sg[1].physAddr = StorPortGetPhysicalAddress(DeviceExtension, NULL, &srbExt->vbr.status, &fragLen);
-    srbExt->vbr.sg[1].length   = sizeof(srbExt->vbr.status);
+    srbExt->sg[0].physAddr = StorPortGetPhysicalAddress(DeviceExtension, NULL, &srbExt->vbr.out_hdr, &fragLen);
+    srbExt->sg[0].length   = sizeof(srbExt->vbr.out_hdr);
+    srbExt->sg[1].physAddr = StorPortGetPhysicalAddress(DeviceExtension, NULL, &srbExt->vbr.status, &fragLen);
+    srbExt->sg[1].length   = sizeof(srbExt->vbr.status);
 
     VioStorVQLock(DeviceExtension, MessageId, &LockHandle, FALSE);
     if (virtqueue_add_buf(vq,
-                     &srbExt->vbr.sg[0],
+                     &srbExt->sg[0],
                      srbExt->out, srbExt->in,
                      &srbExt->vbr, va, pa) >= 0) {
         notify = virtqueue_kick_prepare(vq);
@@ -169,7 +169,7 @@ RhelDoReadWrite(PVOID DeviceExtension,
 
     VioStorVQLock(DeviceExtension, MessageId, &LockHandle, FALSE);
     if (virtqueue_add_buf(vq,
-                     &srbExt->vbr.sg[0],
+                     &srbExt->sg[0],
                      srbExt->out, srbExt->in,
                      &srbExt->vbr, va, pa) >= 0) {
         notify = virtqueue_kick_prepare(vq);
@@ -277,6 +277,7 @@ RhelGetSerialNumber(
     STOR_LOCK_HANDLE    LockHandle = { 0 };
     struct virtqueue    *vq = NULL;
     PADAPTER_EXTENSION  adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
+    VIO_SG              sg[3];
 
     QueueNumber = 0;
     MessageId = 1;
@@ -286,16 +287,16 @@ RhelGetSerialNumber(
     adaptExt->vbr.out_hdr.sector = 0;
     adaptExt->vbr.out_hdr.ioprio = 0;
 
-    adaptExt->vbr.sg[0].physAddr = MmGetPhysicalAddress(&adaptExt->vbr.out_hdr);
-    adaptExt->vbr.sg[0].length   = sizeof(adaptExt->vbr.out_hdr);
-    adaptExt->vbr.sg[1].physAddr = MmGetPhysicalAddress(&adaptExt->sn);
-    adaptExt->vbr.sg[1].length   = sizeof(adaptExt->sn);
-    adaptExt->vbr.sg[2].physAddr = MmGetPhysicalAddress(&adaptExt->vbr.status);
-    adaptExt->vbr.sg[2].length   = sizeof(adaptExt->vbr.status);
+    sg[0].physAddr = MmGetPhysicalAddress(&adaptExt->vbr.out_hdr);
+    sg[0].length   = sizeof(adaptExt->vbr.out_hdr);
+    sg[1].physAddr = MmGetPhysicalAddress(&adaptExt->sn);
+    sg[1].length   = sizeof(adaptExt->sn);
+    sg[2].physAddr = MmGetPhysicalAddress(&adaptExt->vbr.status);
+    sg[2].length   = sizeof(adaptExt->vbr.status);
 
 //    VioStorVQLock(DeviceExtension, MessageId, &LockHandle, FALSE);
     if (virtqueue_add_buf(vq,
-                     &adaptExt->vbr.sg[0],
+                     &sg[0],
                      1, 2,
                      &adaptExt->vbr, NULL, 0) >= 0) {
 #ifdef DBG
@@ -396,25 +397,22 @@ VioStorVQLock(
     RhelDbgPrint(TRACE_LEVEL_VERBOSE, ("--->%s MessageID = %d\n", __FUNCTION__, MessageID));
 
     adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
+    if (!isr) {
+        if (adaptExt->msix_enabled) {
+            if (adaptExt->num_queues > 1) {
 
-    if (!adaptExt->msix_enabled) {
-        if (!isr) {
-            StorPortAcquireSpinLock(DeviceExtension, InterruptLock, NULL, LockHandle);
-        }
-    }
-    else {
-        if ((adaptExt->num_queues == 1) ||
-            (!CHECKFLAG(adaptExt->perfFlags, STOR_PERF_CONCURRENT_CHANNELS))) {
-            if (!isr) {
+                NT_ASSERT(MessageID > 0);
+                NT_ASSERT(MessageID <= adaptExt->num_queues);
+                StorPortAcquireSpinLock(DeviceExtension, DpcLock, &adaptExt->dpc[MessageID - 1], LockHandle);
+            }
+            else {
                 ULONG oldIrql = 0;
                 StorPortAcquireMSISpinLock(DeviceExtension, (adaptExt->msix_one_vector ? 0 : MessageID), &oldIrql);
                 LockHandle->Context.OldIrql = (KIRQL)oldIrql;
             }
         }
         else {
-            NT_ASSERT(MessageID > 0);
-            NT_ASSERT(MessageID <= adaptExt->num_queues);
-            StorPortAcquireSpinLock(DeviceExtension, StartIoLock, &adaptExt->dpc[MessageID - 1], LockHandle);
+            StorPortAcquireSpinLock(DeviceExtension, InterruptLock, NULL, LockHandle);
         }
     }
     RhelDbgPrint(TRACE_LEVEL_VERBOSE, ("<---%s MessageID = %d\n", __FUNCTION__, MessageID));
@@ -432,22 +430,12 @@ VioStorVQUnlock(
     RhelDbgPrint(TRACE_LEVEL_VERBOSE, ("--->%s MessageID = %d\n", __FUNCTION__, MessageID));
     adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
 
-    if (!adaptExt->msix_enabled) {
-        if (!isr) {
+    if (!isr) {
+        if (adaptExt->num_queues > 1) {
             StorPortReleaseSpinLock(DeviceExtension, LockHandle);
-        }
-    }
-    else {
-        if ((adaptExt->num_queues == 1) ||
-            (!CHECKFLAG(adaptExt->perfFlags, STOR_PERF_CONCURRENT_CHANNELS))) {
-            if (!isr) {
-                StorPortReleaseMSISpinLock(DeviceExtension, (adaptExt->msix_one_vector ? 0 : MessageID), LockHandle->Context.OldIrql);
-            }
         }
         else {
-            NT_ASSERT(MessageID > 0);
-            NT_ASSERT(MessageID <= adaptExt->num_queues);
-            StorPortReleaseSpinLock(DeviceExtension, LockHandle);
+            StorPortReleaseMSISpinLock(DeviceExtension, (adaptExt->msix_one_vector ? 0 : MessageID), LockHandle->Context.OldIrql);
         }
     }
     RhelDbgPrint(TRACE_LEVEL_VERBOSE, ("<---%s MessageID = %d\n", __FUNCTION__, MessageID));

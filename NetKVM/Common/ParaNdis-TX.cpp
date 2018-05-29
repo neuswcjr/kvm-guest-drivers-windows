@@ -287,6 +287,7 @@ CParaNdisTX::~CParaNdisTX()
     if (m_StateMachineRegistered)
     {
         m_Context->m_StateMachine.UnregisterFlow(m_StateMachine);
+        m_StateMachineRegistered = false;
     }
 }
 
@@ -300,6 +301,8 @@ bool CParaNdisTX::Create(PPARANDIS_ADAPTER Context, UINT DeviceQueueIndex)
 
     m_nbPool.Create(Context->MiniportHandle);
     m_nblPool.Create(Context->MiniportHandle);
+
+    CreatePath();
 
     return m_VirtQueue.Create(DeviceQueueIndex,
         &m_Context->IODevice,
